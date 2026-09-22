@@ -740,9 +740,18 @@ class Gitea(Forge):
             (host, _project) = parse_gitea_url(url)
         except NotGiteaUrl as e:
             raise UnsupportedForge(url) from e
-        transport = get_transport(
-            f"https://{host}", possible_transports=possible_transports
-        )
+        # An http(s)-cloned repo's web API is normally served from the exact
+        # same host:port - reuse it rather than always assuming the default
+        # HTTPS port, which breaks any self-hosted instance not fronted by a
+        # reverse proxy on 443. A git+ssh clone URL doesn't carry a web port
+        # at all, so keep the historical bare-host HTTPS default for that
+        # case.
+        (in_scheme, _user, _password, _host, in_port, _path) = urlutils.parse_url(url)
+        if in_scheme in ("http", "https"):
+            base_url = f"{in_scheme}://{host}" + (f":{in_port}" if in_port else "")
+        else:
+            base_url = f"https://{host}"
+        transport = get_transport(base_url, possible_transports=possible_transports)
         credentials = get_credentials_by_url(transport.base)
         if credentials is not None:
             instance = cls(transport, credentials.get("private_token"))

@@ -18,9 +18,12 @@ from datetime import datetime
 
 from breezy.tests import TestCase
 
+from .. import forge as gitea_forge
 from ..forge import (
+    Gitea,
     NotGiteaUrl,
     NotMergeRequestUrl,
+    UnsupportedForge,
     parse_gitea_merge_request_url,
     parse_gitea_url,
     parse_timestring,
@@ -89,4 +92,62 @@ class ParseTimestringTests(TestCase):
         self.assertEqual(
             datetime(2018, 9, 7, 11, 16, 17),
             parse_timestring("2018-09-07T11:16:17Z"),
+        )
+
+
+class ProbeFromUrlBaseUrlTests(TestCase):
+    """probe_from_url must ask for credentials under the URL a self-hosted
+    instance was actually cloned from, not an assumed default HTTPS port.
+    """
+
+    def _probe_and_capture_requested_url(self, url):
+        requested = []
+
+        def fake_get_transport(base_url, possible_transports=None):
+            requested.append(base_url)
+
+            class FakeTransport:
+                base = base_url
+
+            return FakeTransport()
+
+        self.overrideAttr(gitea_forge, "get_transport", fake_get_transport)
+        self.overrideAttr(gitea_forge, "get_credentials_by_url", lambda url: None)
+
+        # No credentials are ever returned above, so probe_from_url always
+        # raises UnsupportedForge - that's fine, the point of this test is
+        # which URL it asked get_transport/get_credentials_by_url for.
+        self.assertRaises(UnsupportedForge, Gitea.probe_from_url, url)
+        return requested[0]
+
+    def test_http_reuses_scheme_and_nondefault_port(self):
+        self.assertEqual(
+            "http://gitea.example.com:3000",
+            self._probe_and_capture_requested_url(
+                "http://gitea.example.com:3000/owner/repo.git"
+            ),
+        )
+
+    def test_https_reuses_scheme_and_nondefault_port(self):
+        self.assertEqual(
+            "https://gitea.example.com:8443",
+            self._probe_and_capture_requested_url(
+                "https://gitea.example.com:8443/owner/repo"
+            ),
+        )
+
+    def test_https_default_port_stays_bare(self):
+        self.assertEqual(
+            "https://codeberg.org",
+            self._probe_and_capture_requested_url(
+                "https://codeberg.org/jelmer/example"
+            ),
+        )
+
+    def test_git_ssh_has_no_web_port_falls_back_to_https(self):
+        self.assertEqual(
+            "https://gitea.example.com",
+            self._probe_and_capture_requested_url(
+                "git+ssh://git@gitea.example.com:2222/owner/repo.git"
+            ),
         )
