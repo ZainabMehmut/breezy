@@ -16,9 +16,14 @@
 
 from datetime import datetime
 
+from dromedary import errors as transport_errors
+
+from breezy.forge import UnsupportedForge
 from breezy.tests import TestCase
 
+from .. import forge as _mod_gitlab
 from ..forge import (
+    GitLab,
     NotGitLabUrl,
     NotMergeRequestUrl,
     parse_gitlab_merge_request_url,
@@ -67,4 +72,60 @@ class ParseTimestringTests(TestCase):
         self.assertEqual(
             datetime(2018, 9, 7, 11, 16, 17, 520000),
             parse_timestring("2018-09-07T11:16:17.520Z"),
+        )
+
+
+class StubTransport:
+    """Stand-in for the transport probing would otherwise open."""
+
+    def __init__(self, base):
+        self.base = base
+        self.requests = []
+
+    def request(self, method, url, **kwargs):
+        self.requests.append((method, url))
+        raise transport_errors.UnexpectedHttpStatus(url, 404)
+
+
+class ProbeFromUrlTests(TestCase):
+    def setUp(self):
+        super().setUp()
+        self.credentials = {"private_token": "sekrit"}
+        self.transports = []
+        self.overrideAttr(_mod_gitlab, "get_transport", self._get_transport)
+        self.overrideAttr(
+            _mod_gitlab, "get_credentials_by_url", lambda url: self.credentials
+        )
+        self.overrideAttr(GitLab, "_retrieve_user", lambda self: None)
+
+    def _get_transport(self, url, possible_transports=None):
+        transport = StubTransport(url)
+        self.transports.append(transport)
+        return transport
+
+    def test_scheme_and_port_preserved(self):
+        forge = GitLab.probe_from_url("http://gitlab.example.com:8080/jelmer/example")
+        self.assertEqual("http://gitlab.example.com:8080/", forge.base_url)
+
+    def test_ssh_url_probed_over_https(self):
+        forge = GitLab.probe_from_url(
+            "git+ssh://git@gitlab.example.com:2222/jelmer/example"
+        )
+        self.assertEqual("https://gitlab.example.com/", forge.base_url)
+
+    def test_api_request_uses_the_same_base(self):
+        self.credentials = None
+        self.assertRaises(
+            UnsupportedForge,
+            GitLab.probe_from_url,
+            "http://gitlab.example.com:8080/jelmer/example",
+        )
+        self.assertEqual(
+            [
+                (
+                    "GET",
+                    "http://gitlab.example.com:8080/api/v4/projects/jelmer%2Fexample",
+                )
+            ],
+            self.transports[0].requests,
         )

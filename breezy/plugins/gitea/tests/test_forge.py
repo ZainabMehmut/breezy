@@ -16,9 +16,12 @@
 
 from datetime import datetime
 
+from breezy.forge import UnsupportedForge
 from breezy.tests import TestCase
 
+from .. import forge as _mod_gitea
 from ..forge import (
+    Gitea,
     NotGiteaUrl,
     NotMergeRequestUrl,
     parse_gitea_merge_request_url,
@@ -89,4 +92,44 @@ class ParseTimestringTests(TestCase):
         self.assertEqual(
             datetime(2018, 9, 7, 11, 16, 17),
             parse_timestring("2018-09-07T11:16:17Z"),
+        )
+
+
+class StubTransport:
+    """Stand-in for the transport probing would otherwise open."""
+
+    def __init__(self, base):
+        self.base = base
+
+
+class ProbeFromUrlTests(TestCase):
+    def setUp(self):
+        super().setUp()
+        self.credentials = {"private_token": "sekrit"}
+        self.overrideAttr(
+            _mod_gitea,
+            "get_transport",
+            lambda url, possible_transports=None: StubTransport(url),
+        )
+        self.overrideAttr(
+            _mod_gitea, "get_credentials_by_url", lambda url: self.credentials
+        )
+        self.overrideAttr(Gitea, "_retrieve_user", lambda self: None)
+
+    def test_scheme_and_port_preserved(self):
+        forge = Gitea.probe_from_url("http://gitea.example.com:3000/jelmer/example")
+        self.assertEqual("http://gitea.example.com:3000/", forge.base_url)
+
+    def test_ssh_url_probed_over_https(self):
+        forge = Gitea.probe_from_url(
+            "git+ssh://git@gitea.example.com:2222/jelmer/example"
+        )
+        self.assertEqual("https://gitea.example.com/", forge.base_url)
+
+    def test_no_credentials(self):
+        self.credentials = None
+        self.assertRaises(
+            UnsupportedForge,
+            Gitea.probe_from_url,
+            "http://gitea.example.com:3000/jelmer/example",
         )
