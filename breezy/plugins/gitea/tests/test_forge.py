@@ -14,11 +14,15 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
+import os
 from datetime import datetime
 
-from breezy.tests import TestCase
+from breezy import bedding
+from breezy.forge import UnsupportedForge
+from breezy.tests import TestCase, TestCaseInTempDir
 
 from ..forge import (
+    Gitea,
     NotGiteaUrl,
     NotMergeRequestUrl,
     parse_gitea_merge_request_url,
@@ -90,3 +94,22 @@ class ParseTimestringTests(TestCase):
             datetime(2018, 9, 7, 11, 16, 17),
             parse_timestring("2018-09-07T11:16:17Z"),
         )
+
+
+class ProbeFromHostnameTests(TestCaseInTempDir):
+    def setUp(self):
+        super().setUp()
+        os.makedirs(bedding.config_dir(), exist_ok=True)
+        with open(os.path.join(bedding.config_dir(), "gitea.conf"), "w") as f:
+            f.write(
+                "[example]\n"
+                "url = http://gitea.example.com:3000/\n"
+                "private_token = sekrit\n"
+            )
+
+    def test_known_hostname(self):
+        forge = Gitea.probe_from_hostname("gitea.example.com")
+        self.assertEqual("gitea.example.com", forge.base_hostname)
+
+    def test_unknown_hostname(self):
+        self.assertRaises(UnsupportedForge, Gitea.probe_from_hostname, "codeberg.org")
